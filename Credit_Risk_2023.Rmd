@@ -1,0 +1,1317 @@
+---
+title: "Major Data Analysis Project"
+author: "Phuong Anh Do"
+date: "29th October 2023"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r eval=FALSE, include=FALSE}
+install.packages('ggpubr')
+install.packages('GGally')
+install.packages('DHARMa')
+install.packages('AICcmodavg')
+install.packages('ggplot2')
+install.packages('tidyverse')
+```
+```{r eval=FALSE, include=FALSE}
+install.packages('tinytex')
+tinytex::install_tinytex()
+```
+
+
+
+
+```{r, include=FALSE}
+# Import libraries
+
+
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(GGally)
+library(MASS)
+library("DHARMa")
+library(lme4)
+library(AICcmodavg)
+library(reshape2)
+library('pROC')
+library(png)
+library(grid)
+require(compiler)
+require(parallel)
+require(boot)
+require(lattice)
+library(zoo)
+```
+
+
+```{r, include=TRUE}
+# Read csv files
+testing_data <- read.csv(file = "data/benchmark_testing_loan_data.csv", header = TRUE, row.names="X")
+training_data <- read.csv(file = "data/benchmark_training_loan_data.csv", header = TRUE, row.names="X")
+validation_data <- read.csv(file = "data/benchmark_validation_loan_data.csv", header = TRUE, row.names="X")
+extended_data <- read.csv(file = "data/extendend_version_loan_data.csv", header = TRUE, row.names="X")
+
+```
+
+# Introduction
+
+## Objective
+
+Build a statistical model to predict loan default based on information known at the time of loan application
+
+## Data
+
+The historical lending data includes the training, validation, and testing set which detail 20 possible covariate. An extended version of the data is also provided that includes additional information about the date the loan was issued and the approximate address (state and leading zip code digits).
+
+* addr_state: Address state
+* annual_inc: Self-reported annual income
+* credit_age_yrs: The number of years since the earliest reported credit line
+* delinq_2yrs: The number of past-due incidences of delinquency for the past 2 years
+* dti: Debt to income ratio
+* earliest_cr_line: The month of the earliest reported credit line 
+* emp_length: Employment length in years (0: less than one year and 10: ten or more years)
+* home_ownership: Home ownership status (rent, own, mortage, other)
+* inq_last_6mths: the number of inquires in past 6 months
+* int_rate: Interest Rate on the loan
+* issue_d: The month which the loan was funded
+* last_pymnt_amnt: Last total payment amount received
+* loan_amnt: The amount of loan applied for
+* open_acc: The number of open credit lines
+* pub_rec: The number of derogatory public records
+* purpose: A category for the loan request
+* revol_bal: Total credit revolving balance
+* revol_util: Revolving line utilisation rate
+* term: The number of payments on the loan (36 months or 60 months)
+* total_acc: The total number of credit lines
+* total_rec_int: Interest received to date
+* total_rec_prncp: Principal received to date
+* verification_status: Indicate if income is verified (verified, not verified, source verified)
+* zip_code: The first 3 number of the zip code
+
+
+
+## Key Questions
+
+Build a generalised linear model to address questions: 
+
+1. How does your new model perform compared to the one you used previously? How can it be expected to perform on new loan applications? For this, you must use the training and validation data used in the previous benchmark.
+
+2. What are the important variables in this model and how do they compare to variables that are traditionally important for predicting credit risk in the banking sector? One regulatory requirement for lenders is that they need to to clearly explain how a loan application was assessed. To demonstrate to management that this can be achieved, clearly interpret all covariates in your model in terms of their effect on predicting credit risk.
+
+
+Build a generalised linear mixed effects model to address questions (use the extended data version):
+
+3. Can accounting for this variation (e.g., state/zip-code and time) improve performance benchmarks?
+
+4. Are there any surprising differences in variables that are important for predicting credit risk? This is again essential for regulations.
+
+5. Does credit risk change over time or between states? This is not something the bank has previously investigated and results may inform modified loan policies in the future.
+
+
+## Data Cleaning
+
+* Create `clean_training_data`, `clean_validation_data` and `clean_testing_data`
+* Fill in NA with the mode for categorical variables
+* Convert variables to correct data types
+* Factor all categorical variables
+* Scale all numeric variables to avoid bias and allow all features to contribute equally
+
+```{r, include=TRUE}
+# Create new dataframes
+clean_training_data <- training_data
+clean_validation_data <- validation_data
+clean_testing_data <- testing_data
+clean_extended_data <- extended_data
+
+```
+
+```{r, include=TRUE}
+# Fill in NA with mode
+mode_emp_length <- names(sort(table(clean_training_data$emp_length), decreasing = TRUE))[1]
+clean_training_data$emp_length[clean_training_data$emp_length == "n/a"] <- mode_emp_length
+
+mode_home_ownership <- names(sort(table(clean_training_data$home_ownership), decreasing = TRUE))[1]
+clean_training_data$home_ownership[clean_training_data$home_ownership == "NONE"] <- mode_home_ownership
+
+mode_emp_length <- names(sort(table(clean_validation_data$emp_length), decreasing = TRUE))[1]
+clean_validation_data$emp_length[clean_validation_data$emp_length == "n/a"] <- mode_emp_length
+
+mode_home_ownership <- names(sort(table(clean_validation_data$home_ownership), decreasing = TRUE))[1]
+clean_validation_data$home_ownership[clean_validation_data$home_ownership == "NONE"] <- mode_home_ownership
+
+mode_emp_length <- names(sort(table(clean_testing_data$emp_length), decreasing = TRUE))[1]
+clean_testing_data$emp_length[clean_testing_data$emp_length == "n/a"] <- mode_emp_length
+
+mode_home_ownership <- names(sort(table(clean_testing_data$home_ownership), decreasing = TRUE))[1]
+clean_testing_data$home_ownership[clean_testing_data$home_ownership == "NONE"] <- mode_home_ownership
+
+mode_emp_length <- names(sort(table(clean_extended_data$emp_length), decreasing = TRUE))[1]
+clean_extended_data$emp_length[clean_extended_data$emp_length == "n/a"] <- mode_emp_length
+
+mode_home_ownership <- names(sort(table(clean_extended_data$home_ownership), decreasing = TRUE))[1]
+clean_extended_data$home_ownership[clean_extended_data$home_ownership == "NONE"] <- mode_home_ownership
+
+```
+
+```{r, include=TRUE}
+# Factor all categorical variables
+
+term_levels <- c("36 months", "60 months")
+length_levels <- c("< 1 year","1 year", "2 years","3 years","4 years","5 years","6 years","7 years","8 years","9 years","10+ years")
+home_ownership_levels <- c("MORTGAGE", "RENT", "OWN", "OTHER")
+status_levels <- c("Not Verified", "Source Verified", "Verified")
+purpose_levels <- c("other", "debt_consolidation", "home_improvement", "credit_card", "major_purchase", "car", "medical", "vacation", "educational", "wedding", "small_business", "house", "moving", "renewable_energy")
+
+#term_levels
+clean_training_data$term <- factor(clean_training_data$term, term_levels)
+clean_validation_data$term <- factor(clean_validation_data$term, term_levels)
+clean_testing_data$term <- factor(clean_testing_data$term, term_levels)
+clean_extended_data$term <- factor(clean_extended_data$term, term_levels)
+
+#length_levels
+clean_training_data$emp_length <- factor(clean_training_data$emp_length, length_levels)
+clean_validation_data$emp_length <- factor(clean_validation_data$emp_length, length_levels)
+clean_testing_data$emp_length <- factor(clean_testing_data$emp_length, length_levels)
+clean_extended_data$emp_length <- factor(clean_extended_data$emp_length, length_levels)
+
+#home_ownership_levels
+clean_training_data$home_ownership <- factor(clean_training_data$home_ownership, home_ownership_levels)
+clean_validation_data$home_ownership <- factor(clean_validation_data$home_ownership, home_ownership_levels)
+clean_testing_data$home_ownership <- factor(clean_testing_data$home_ownership, home_ownership_levels)
+clean_extended_data$home_ownership <- factor(clean_extended_data$home_ownership, home_ownership_levels)
+
+#status_levels
+clean_training_data$verification_status <- factor(clean_training_data$verification_status, status_levels)
+clean_validation_data$verification_status <- factor(clean_validation_data$verification_status, status_levels)
+clean_testing_data$verification_status <- 
+  factor(clean_testing_data$verification_status, status_levels)
+clean_extended_data$verification_status <- factor(clean_extended_data$verification_status, status_levels)
+
+#purpose_levels
+clean_training_data$purpose <- factor(clean_training_data$purpose, purpose_levels)
+clean_validation_data$purpose <- factor(clean_validation_data$purpose, purpose_levels)
+clean_testing_data$purpose <- factor(clean_testing_data$purpose, purpose_levels)
+clean_extended_data$purpose <- factor(clean_extended_data$purpose, purpose_levels)
+
+```
+
+
+
+```{r, include=TRUE}
+# Scale all numeric variables
+scale_function <- function(data, columns_to_scale) {
+  scaled_data <- data
+  for (col in columns_to_scale) {
+    scaled_data[[col]] <- scale(data[[col]])
+  }
+  return(scaled_data)
+}
+
+columns_to_scale <- c("annual_inc", "revol_bal", "loan_amnt", "int_rate", 
+                      "dti", "delinq_2yrs", "inq_last_6mths", "open_acc", 
+                      "pub_rec", "revol_util", "total_acc", "credit_age_yrs")
+clean_training_data <- scale_function(clean_training_data, columns_to_scale)
+clean_validation_data <- scale_function(clean_validation_data, columns_to_scale)
+clean_testing_data <- scale_function(clean_testing_data, columns_to_scale)
+clean_extended_data <- scale_function(clean_extended_data, columns_to_scale)
+
+```
+
+
+## Data exploration
+
+We will consider the following predictor variables in the training data, and determine if/how they appear to be related to `repay_fail`
+
+Numerical Types:
+
+1. Continuous predictors: 
+
+* `loan_amnt`: The amount of loan applied for
+* `int_rate`: Interest Rate on the loan
+* `annual_inc`: Self-reported annual income
+* `dti`: Debt to income ratio
+* `revol_bal`: Total credit revolving balance
+* `revol_util`: Revolving line utilisation rate
+* `credit_age_yrs`: The number of years since the earliest reported credit line
+
+2. Discrete predictors
+
+* `delinq_2yrs`: The number of past-due incidences of delinquency for the past 2 years
+* `inq_last_6mths`: the number of inquires in past 6 months
+* `open_acc`: The number of open credit lines
+* `pub_rec`: The number of derogatory public records
+* `total_acc`: The total number of credit lines
+
+
+Categorical predictors
+
+* `term`: The number of payments on the loan (36 months or 60 months)
+* `emp_length`: Employment length in years (0: less than one year and 10: ten or more years)
+* `home_ownership`: Home ownership status (rent, own, mortage, other)
+* `verification_status`: Indicate if income is verified (verified, not verified, source verified)
+* `purpose`: A category for the loan request
+
+
+## Exploring the data - Continuous predictors
+
+```{r,include=TRUE}
+ggpairs(training_data[, c("loan_amnt", "int_rate", "annual_inc", "dti", "revol_bal", "revol_util",  "credit_age_yrs")])
+
+```
+
+* There do not seem to be any strong linear relations among our continuous predictors
+* Suggests collinearity should not be an issue
+
+
+
+## Exploring the data - Numerical type
+
+```{r, include=TRUE}
+tmp1 <- melt(clean_training_data[, c("loan_amnt","int_rate", "annual_inc", "dti", "repay_fail")], id.vars = "repay_fail")
+
+ggplot(tmp1, aes(x = factor(repay_fail), y = value, fill = factor(repay_fail))) +
+  geom_boxplot() +
+  facet_wrap(~variable, scales = "free_y", ncol = 2)
+
+
+tmp2 <- melt(clean_training_data[, c("delinq_2yrs","inq_last_6mths", "open_acc", "pub_rec", "repay_fail")], id.vars = "repay_fail")
+
+ggplot(tmp2, aes(x = factor(repay_fail), y = value, fill = factor(repay_fail))) +
+  geom_boxplot() +
+  facet_wrap(~variable, scales = "free_y", ncol = 2)
+
+
+tmp3 <- melt(clean_training_data[, c("revol_bal","revol_util","total_acc","credit_age_yrs", "repay_fail")], id.vars = "repay_fail")
+
+ggplot(tmp3, aes(x = factor(repay_fail), y = value, fill = factor(repay_fail))) +
+  geom_boxplot() +
+  facet_wrap(~variable, scales = "free_y", ncol = 2)
+
+```
+
+## Exploring the data - Numerical type
+
+* Otherwise, could consider an exploratory approach for logistic regression
+* Explore relationship between $\log p(1-p)$ and $x$
+* Advantageous as can get an idea about the form of the linear predictor
+
+```{r, include=TRUE}
+par(mfrow=c(2, 2))
+
+columns <- c("loan_amnt", "int_rate", "annual_inc", "dti", "delinq_2yrs", "inq_last_6mths", "open_acc", "pub_rec", "revol_bal", "revol_util", "total_acc", "credit_age_yrs")
+
+for (col in columns) {
+  x1 <- clean_training_data[[col]]
+  y <- clean_training_data$repay_fail
+  jittered_x1 <- jitter(x1, factor = 0.1)  
+  g <- cut(jittered_x1, breaks = quantile(jittered_x1, seq(0, 100, 5)/100))
+  ym <- tapply(y, g, mean)
+  xm <- tapply(jittered_x1, g, mean)
+  ymp <- log(ym / (1 - ym))
+  
+  plot(xm, ymp, xlab = col)
+}
+
+```
+Based on visualisation, we categorise the potential numerical predictor variables into three groups: strong relationship, moderate relationship, and weak relationship, in relation to the target variable:
+
+* Strong relationship: `int_rate`, `revol_util`
+* Moderate relationship: `loan_amnt`, `annual_inc`, `dti`, `inq_last_6mths`
+* Weak relationship: `delinq_2yrs`, `open_acc`, `pub_rec`, `revol_bal`, `total_acc`, `credit_age_yrs`
+
+
+## Exploring the data - Categorical predictors
+
+```{r, include=TRUE}
+plot_categorical_variable <- function(data, categorical_variable) {
+  ggplot(data, aes(x = .data[[categorical_variable]], y = repay_fail)) +
+    geom_bar(stat = "summary", fun = "mean", fill = "gray") +
+    labs(x = categorical_variable, y = "Average Repayment Failure Rate") +
+    theme_minimal()
+}
+
+p1 <- plot_categorical_variable(clean_training_data, "term")
+p2 <- plot_categorical_variable(clean_training_data, "emp_length")
+p3 <- plot_categorical_variable(clean_training_data, "home_ownership")
+p4 <- plot_categorical_variable(clean_training_data, "verification_status")
+p5 <- plot_categorical_variable(clean_training_data, "purpose")
+
+ggarrange(p1, p2, ncol = 2, nrow = 1)
+ggarrange(p3, p4, ncol = 2, nrow = 1)
+ggarrange(p5, ncol = 1, nrow = 1)
+
+```
+
+Based on visualisation, we categorise the potential categorical predictor variables into three groups: strong relationship, moderate relationship, and weak relationship, in relation to the target variable.
+
+* Strong relationship: `term`, `purpose`
+* Moderate relationship: `home_ownership`
+* Weak relationship: `emp_length`, `verification_status`
+
+
+## Stepwise selection
+
+Stepwise selection based on the AIC was chosen to determine which variables should appear in the model. Both backward and forward selection were used to determine the preferred model (based on AIC):
+
+```{r, include=TRUE}
+#define intercept-only model
+null_model <- glm(repay_fail ~ 1, data=clean_training_data, family="binomial")
+
+#define model with all predictors
+full_interaction_model <- glm(repay_fail ~ ., data=clean_training_data, family="binomial")
+
+#Perform backward and forward selection:
+backward_sel_model <- stepAIC(
+  full_interaction_model,direction = "backward",trace = 0)
+forward_sel_model <- stepAIC(
+  null_model,
+  scope = formula(full_interaction_model), 
+  direction = "forward",
+  trace = 0) # trace = 0 prevents automatic output of stepAIC function.
+
+```
+
+
+```{r, include=TRUE}
+#Inspect models:
+backward_sel_model$formula
+
+AIC(backward_sel_model)
+
+```
+
+```{r, include=TRUE}
+#Inspect models:
+forward_sel_model$formula
+
+AIC(forward_sel_model)
+
+```
+
+Three model options are built based on data exploration:
+
+*Model1: Stepwise selection based on the AIC suggestion*
+
+repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership
+
+*Model2: Use variables with strong and moderate relationships with the target variable based on visualisation*
+
+repay_fail ~ int_rate + revol_util + term + purpose + loan_amnt + annual_inc + dti + inq_last_6mths + home_ownership
+
+*Model3: Use only variables with strong relationships with the target variable based on visualisation*
+
+repay_fail ~ int_rate + revol_util + term + purpose
+
+
+```{r, include=TRUE}
+model1_training <- glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_training_data, family=binomial)
+
+model2_training <- glm(repay_fail ~ int_rate + revol_util + term + purpose + loan_amnt + annual_inc + dti + inq_last_6mths + home_ownership, data=clean_training_data, family=binomial)
+
+model3_training <- glm(repay_fail ~ int_rate + revol_util + term + purpose, data=clean_training_data, family=binomial)
+
+
+AIC(model1_training)
+AIC(model2_training)
+AIC(model3_training)
+
+```
+
+
+```{r, include=TRUE}
+prob_model1_training=predict(model1_training,type=c("response"))
+prob_model2_training=predict(model2_training,type=c("response"))
+prob_model3_training=predict(model3_training,type=c("response"))
+
+g_model1 <- roc(clean_training_data$repay_fail ~ prob_model1_training)
+g_model2 <- roc(clean_training_data$repay_fail ~ prob_model2_training)
+g_model3 <- roc(clean_training_data$repay_fail ~ prob_model3_training)
+## Setting levels: control = 0, case = 1
+## Setting direction: controls < cases
+
+# Calculate AUC
+auc_value_model1 <- auc(g_model1)
+auc_value_model2 <- auc(g_model2)
+auc_value_model3 <- auc(g_model3)
+
+# Compute Gini coefficient
+gini_model1 <- 2 * (auc_value_model1 - 1/2)
+gini_model2 <- 2 * (auc_value_model2 - 1/2)
+gini_model3 <- 2 * (auc_value_model3 - 1/2)
+
+
+# Print the value of Gini coefficient
+print(paste("Gini coefficient (model1):", gini_model1))
+print(paste("Gini coefficient (model2):", gini_model2))
+print(paste("Gini coefficient (model3):", gini_model3))
+
+```
+
+* Model 1 fits the training data best, but there is a risk of overfitting.
+
+## Validation Data
+
+* Validate these models using the validation data set
+* Calculate AIC and Gini score for each model
+
+
+```{r, include=TRUE}
+model1_validation <- glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_validation_data, family=binomial)
+
+model2_validation <- glm(repay_fail ~ int_rate + revol_util + term + purpose + loan_amnt + annual_inc + dti + inq_last_6mths + home_ownership, data=clean_validation_data, family=binomial)
+
+model3_validation <- glm(repay_fail ~ int_rate + revol_util + term + purpose, data=clean_validation_data, family=binomial)
+
+AIC(model1_validation)
+AIC(model2_validation)
+AIC(model3_validation)
+```
+
+```{r, include=TRUE}
+prob_model1_validation=predict(model1_validation,type=c("response"))
+prob_model2_validation=predict(model2_validation,type=c("response"))
+prob_model3_validation=predict(model3_validation,type=c("response"))
+
+g_model1 <- roc(clean_validation_data$repay_fail ~ prob_model1_validation)
+g_model2 <- roc(clean_validation_data$repay_fail ~ prob_model2_validation)
+g_model3 <- roc(clean_validation_data$repay_fail ~ prob_model3_validation)
+
+# Calculate AUC
+auc_value_model1 <- auc(g_model1)
+auc_value_model2 <- auc(g_model2)
+auc_value_model3 <- auc(g_model3)
+
+# Compute Gini coefficient
+gini_model1 <- 2 * (auc_value_model1 - 1/2)
+gini_model2 <- 2 * (auc_value_model2 - 1/2)
+gini_model3 <- 2 * (auc_value_model3 - 1/2)
+
+print(paste("Gini coefficient (model1):", gini_model1))
+print(paste("Gini coefficient (model2):", gini_model2))
+print(paste("Gini coefficient (model3):", gini_model3))
+```
+* Both AIC and Gini score indicate that Model 1 performs the best on the validation.
+* Select Model 1 (which uses stepwise selection) as the final model.
+* Try other link functions?
+
+```{r, include=TRUE}
+model1_validation_logit <- glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_validation_data, family=binomial(link="logit"))
+
+model1_validation_probit <- glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_validation_data, family=binomial(link="probit"))
+
+model1_validation_cloglog <- glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_validation_data, family=binomial(link="cloglog"))
+
+print(paste("AIC value (logit function):", AIC(model1_validation_logit)))
+print(paste("AIC value (probit function):", AIC(model1_validation_probit)))
+print(paste("AIC value (cloglog function):", AIC(model1_validation_cloglog)))
+```
+
+* Based on AIC, logit link function is the best for this data.
+
+## Test Data
+
+* Test this model using test data.
+
+```{r, include=TRUE}
+model_test <- glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_testing_data, family=binomial)
+
+summary(model_test)
+
+```
+
+## Goodness-of-fit
+
+```{r, include=TRUE}
+#chi-squared test
+qchisq(0.95,df=length(clean_testing_data$repay_fail)-5) 
+deviance(model_test)
+
+#fitted-residuals plot
+plot(fitted.values(model_test),residuals(model_test), xlab = "Fitted Values", ylab = "Residuals")
+points(c(0,1), c(0,0),type="l") 
+
+#DHARMa residual
+res=simulateResiduals(model_test)
+plot(res)
+
+```
+
+* From chi-squared test, it suggests that the model fits the data well with no evidence of overdispersion.
+* The pearson shows a mean of 0 and variance of 1 but we don't know the theoretical distribution.
+* Simulated residuals looks uniform.
+* However, residual plots can be difficult to interpret for logistic regression models, particularly in the binary case.
+* Alternatively, predictive performance can been assessed by looking at this for “seen” and “unseen” (i.e. hold out) data.
+
+## Predictive Performance
+
+```{r, include=TRUE}
+# Seen data
+pred <- predict(model_test)
+pred <- exp(pred)/(1+exp(pred))
+plot(clean_testing_data$repay_fail,pred,ylim=c(0,1.1),
+xlim=c(0,1.1),ylab="Predicted",xlab="Observed")
+points(c(0,2),c(0,2),type="l")
+
+```
+
+
+```{r, include=FALSE}
+# Unseen data
+pred <- numeric(length(clean_testing_data$repay_fail))
+
+options(warn=-1)
+
+for (i in 1:length(clean_testing_data$repay_fail)) {
+  temp <- clean_testing_data[-i, ]
+  fit.cv <- glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, family = "binomial", data = temp)
+  predlp <- predict(fit.cv, newdata = clean_testing_data[i,])
+  pred[i] <- exp(predlp) / (1 + exp(predlp))
+}
+
+options(warn=0)
+```
+
+
+```{r, include=TRUE}
+plot(clean_testing_data$repay_fail,pred,ylim=c(0,1.1),
+xlim=c(0,1.1),ylab="Predicted",xlab="Observed")
+points(c(0,2),c(0,2),type="l")
+
+```
+
+* Not particularly accurate predictions
+
+## Cross-validation
+
+```{r glm8, include=TRUE}
+pred.cv <- rep(0, 7684)
+for (i in 1:length(clean_testing_data$repay_fail)) {
+  fit.cv <- suppressWarnings(glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_testing_data, family=binomial(link="logit")))
+  pred.cv[i] <- predict(fit.cv,newdata=clean_testing_data[i,])
+}
+pred.cv <- exp(pred.cv) / (1 + exp(pred.cv))
+ycv <- rep(0, 7684) 
+ind <- which(pred.cv > 0.625)
+ycv[ind] <- 1
+table(clean_testing_data$repay_fail,ycv) 
+  
+```
+
+* The out-of-sample predictive performance of the model is quite high i.e. (6536 + 7) / (6536 + 3 + 7 + 1138) = 85\%.
+
+# Question 1: How does your new model perform compared to the one you used previously? How can it be expected to perform on new loan applications?
+
+```{r, include=TRUE}
+nfit <- suppressWarnings(glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_training_data, family=binomial(link="logit")))
+prob= predict(nfit, type = c("response"))
+g <- roc(clean_training_data$repay_fail ~ prob)
+gini <- 2 * (g$auc - 1/2)
+print(gini)
+
+```
+
+```{r, include=TRUE}
+plot(g, main = "Train set ROC, Gini=0.410", xlab = "False Positive Rate", ylab = "True Positive Rate")
+
+```
+
+```{r, include=TRUE}
+nfit <- glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_validation_data, family=binomial(link="logit"))
+prob= predict(nfit, type = c("response"))
+g <- roc(clean_validation_data$repay_fail ~ prob)
+gini <- 2 * (g$auc - 1/2)
+print(gini)
+
+```
+
+```{r, include=TRUE}
+plot(g, main = "Validation set ROC, Gini=0.406", xlab = "False Positive Rate", ylab = "True Positive Rate")
+
+```
+
+* The new model: Training 0.410, Validation 0.406
+* The previous model: Training 0.114, Validation 0.110
+* This new model has a higher Gini coefficient value than the previous one in both training and validation data. 
+* From the ROC curve and Gini coefficient, the new model is more effective and accurate at distinguishing between the class of 1 and 0 in this context of a binary classification task for predicting credit risk.
+
+
+# Question 2: What are the important variables in this model and how do they compare to variables that are traditionally important for predicting credit risk in the banking sector?
+
+```{r, include=TRUE}
+summary(model_test)
+
+```
+
+* The significant variables in this model are: `int_rate`, `purposecar`, `purposeeducational`, `purposewedding`, `purposesmall_business`, `annual_inc`, `inq_last_6mths`, `term60 months`, `revol_bal`, `pub_rec`, and `emp_length8 years`
+
+* For continuous predictors, the coefficients give the change in the log odds of `repay_fail` being 1 (versus 0) for a one unit increase in the predictor variable. For example, for every increase in `int_rate`, the log odds of `repay_fail` being 1 increases by 0.38. On the other hand, for every increase in `annual_inc`, the log odds of `repay_fail` being 1 decreases by  0.49 (i.e. -0.49).
+* For categorical predictors, the coefficients describes the change in the log odds for each level compared to the base level. For example, the log offs of `repay_fail` being 1 increases by 0.51 for every unit of `term60 months` compared to `term30 months`. Whereas, the log offs of `repay_fail` being 1 decreases by 0.36 (i.e. -0.36) for every unit of `emp_length8 years` compared to `emp_length<1 year`.
+
+* When comparing to variables that are traditionally important for predicting credit risk, we can see some familiar variables that are traditionally used such as `int_rate` and `annual_inc`- indicate the economic conditions or `pub_rec` and `inq_last_6mths` - indicate the credit history. 
+* However, there are variables that are traditionally important but absent in this model. For example, some banks would use the debt to income (`dti`) or the length of credit history (`credit_age_yrs`) for predicting credit risk.
+
+## Multiplicative effect
+
+```{r, include=TRUE}
+coef_estimates <- coef(model_test)
+std_errors <- summary(model_test)$coefficients[, "Std. Error"]
+
+
+upper_bounds <- 1/exp(coef_estimates - 2 * std_errors)
+lower_bounds <- 1/exp(coef_estimates + 2 * std_errors)
+
+multiplicative_effect <- data.frame(
+  Lower_Bound = lower_bounds,
+  Upper_Bound = upper_bounds
+)
+
+print(multiplicative_effect)
+
+```
+
+* For example:
+* According our model, we are 95% confident that for each increase in `int_rate` the odds of `repay_fail` being 1 increase by 0.63 to 0.75 times. 
+
+## Confidence Intervals
+
+* It can be nice to get confidence intervals (CIs)
+
+```{r, include=TRUE}
+se <- sqrt(diag(vcov(model_test)))
+(tab <- cbind(Est = coef(model_test), LL = coef(model_test) - 1.96 * se, UL = coef(model_test) + 1.96 *
+    se))
+```
+
+* If we wanted odds ratios instead of coefficients on the logit scale, we could exponentiate the estimates and CIs
+
+```{r,include=TRUE}
+exp(tab)
+```
+
+
+
+```{r, include=TRUE}
+tab_df <- as.data.frame(tab)
+
+# Rename the columns in the data frame
+colnames(tab_df) <- c("Estimate", "LL", "UL")
+
+# Add a column for predictor names
+tab_df$Predictor <- rownames(tab_df)
+
+# Create a forest plot
+forest_plot <- ggplot(tab_df, aes(x = Estimate, y = Predictor)) +
+  geom_point(size = 3, color = "blue") +
+  geom_errorbarh(aes(xmin = LL, xmax = UL), height = 0.2, color = "black") +
+  labs(title = "95% Confidence Intervals",
+       x = "Coefficient Estimate (Exp)") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 8))
+
+# Print the forest plot
+print(forest_plot)
+
+```
+
+With significant variables in this model:
+
+* `int_rate` is 1.4624947 (95% 1.3411217 1.5948520)
+
+* `purposecar` is 0.6911480 (95% 0.4478390 1.0666459)
+
+* `purposeeducational` is 2.0475182 (95% 1.2054187 3.4779044)
+
+* `purposewedding` is 0.6137371 (95% 0.3613410 1.0424315)
+
+* `purposesmall_business` is 1.5055568 (95% 1.0788624 2.1010105)
+
+* `annual_inc` is 0.6128461 (95% 0.5046089 0.7442999)
+
+* `inq_last_6mths` is 1.2728759 (95% 1.1998267 1.3503725)
+
+* `term60 months` is 1.6709932 (95% 1.4246081 1.9599905)
+
+* `revol_bal` is 1.1411573 (95% 1.0513202 1.2386711)
+
+* `pub_rec` is 1.0758323 (95% 1.0164538 1.1386797)
+
+* `emp_length8 years` is 0.6972983 (95% 0.4551981 1.0681611)
+
+From the plot, we notice that the width of the confidence intervals is larger for `home_ownershipOTHER`, `purposehouse`, or `purposerenewable_energy` which indicates instability around their effect. While, among significant variables, `purposecar`, `purposeeducational`, `purposewedding`, and `emp_length8 years` have larger confidence intervals. 
+
+
+# A generalised linear mixed effects model to address questions 3)–5)
+
+## Data cleaning
+
+* Convert the `issue_d` and `earliest_cr_line` to Date type
+* Create new columns of years and months from `issue_d` and `earliest_cr_line` for later nested structure
+
+```{r, include=TRUE}
+# Convert the 'issue_d' and 'earliest_cr_line' column to Date type
+clean_extended_data$issue_d <- as.yearmon(clean_extended_data$issue_d, format = "%b-%y")
+clean_extended_data$earliest_cr_line <- as.yearmon(clean_extended_data$earliest_cr_line, format = "%b-%y")
+```
+
+```{r, include=TRUE}
+# Create new columns for year ('issue_y') and year-month ('issue_ym')
+clean_extended_data$issue_y <- format(clean_extended_data$issue_d, "%Y") 
+clean_extended_data$issue_m <- format(clean_extended_data$issue_d, "%m")  
+```
+
+```{r, include=TRUE}
+# Create new columns for year ('earliest_cr_line_y') and year-month ('earliest_cr_line_m')
+clean_extended_data$earliest_cr_line_y <- format(clean_extended_data$earliest_cr_line, "%Y") 
+clean_extended_data$earliest_cr_line_m <- format(clean_extended_data$earliest_cr_line, "%m")  
+
+```
+
+```{r, include=TRUE}
+# Modify 'earliest_cr_line_y' column to convert years greater than 2023 to the 1900s
+clean_extended_data$earliest_cr_line_y <- ifelse(clean_extended_data$earliest_cr_line_y > 2023, 
+                                        paste0("19", substr(clean_extended_data$earliest_cr_line_y, 3, 4)),
+                                        clean_extended_data$earliest_cr_line_y)
+
+# Check the result
+head(clean_extended_data)
+```
+
+## Visualisation
+
+* Data exploration to determine whether state/zip-code and time appear related to predicting credit risk.
+
+```{r, include=TRUE}
+# Calculate the mean repayment failure rates
+state <- unique(clean_extended_data$addr_state)
+meanb <- rep(0, length(state))  # Initialize meanb vector
+for (i in 1:length(state)) {
+  ind <- which(clean_extended_data$addr_state == state[i])
+  meanb[i] <- mean(clean_extended_data$repay_fail[ind])
+}
+
+# Find states with the highest and lowest mean repayment failure rates
+highest_mean_state <- state[which.max(meanb)]
+lowest_mean_state <- state[which.min(meanb)]
+
+# Create a vector of colors for each state
+state_colors <- ifelse(state == highest_mean_state, "red", ifelse(state == lowest_mean_state, "blue", "black"))
+
+# Create the plot with color-coded states
+plot(1:length(state), meanb, xlim = c(1, length(state)), col = state_colors, pch = 19)
+text(1:length(state), meanb, state, cex = 0.6, pos = 4, col = "black")
+title(main = "Mean Repayment Failure by State")
+
+# Add legend to show which states are highlighted
+legend("topleft", legend = c(paste("Highest:", highest_mean_state), paste("Lowest:", lowest_mean_state)), fill = c("red", "blue"))
+```
+
+
+* This plots is used as an initial exploration of the relationship between area and repayment failure. Higher repayment mean indicates that loans from these states are more likely to fail repayment. Conversely, lower repayment mean indicates a lower likelihood of loan repayment failure on average.
+
+- NE: Nebraska
+
+- ME: Maine
+
+* This area difference in highest and lowest repayment mean suggests that there may be regional differences in repayment behaviour. It can be suggested to inspect specific economic, demographic, or regulatory factors that might explain these differences in repayment failure rates among states.
+
+
+```{r, include=TRUE}
+meanb <- rep(0,826)
+for(i in 1:826){
+  ind <- which(clean_extended_data$zip_code == unique(clean_extended_data$zip_code)[i])
+  meanb[i] <- mean(clean_extended_data$repay_fail[ind])
+}
+
+plot(1:826,meanb)
+title(main = "Mean Repayment Failure by Zip Code")
+
+```
+
+* The plot points that there is a trend in loan repayment performance across different zip codes. 
+* Let's explore the the zip codes with the highest mean repayment failure.
+
+```{r, include=TRUE}
+
+# Initialize vectors to store zip codes and their corresponding mean repayment failure rates
+zip_codes <- character(0)
+mean_rates <- numeric(0)
+
+# Calculate the mean repayment failure rates for each zip code
+for (i in 1:826) {
+  ind <- which(clean_extended_data$zip_code == unique(clean_extended_data$zip_code)[i])
+  mean_rate <- mean(clean_extended_data$repay_fail[ind])
+  
+  # Check if the mean rate is over 0.8
+  if (mean_rate > 0.8) {
+    zip_codes <- c(zip_codes, unique(clean_extended_data$zip_code)[i])
+    mean_rates <- c(mean_rates, mean_rate)
+  }
+}
+
+# Create a plot of zip codes with mean rates over 0.8
+plot(1:length(zip_codes), mean_rates, type = "b", pch = 19, col = "blue", xlab = "Zip Codes", ylab = "Mean Repayment Failure Rate", main = "Zip Codes with Mean Rates > 0.8")
+
+# Add labels for each zip code with a 45-degree rotation
+text(1:length(zip_codes), mean_rates, labels = zip_codes, cex = 0.6, pos = 4, col = "red", xpd = TRUE, srt = 45)
+
+# Set a larger bottom margin to accommodate rotated labels
+par(mar = c(5, 4, 4, 6) + 0.1)
+```
+
+* The above graph shows that zip-code areas where repayments are most likely to fail are:
+
+- 059XX: Vermont
+
+- 669xx: Kansas
+
+- 094xx: Non-found
+
+- 691xx: Nebraska
+
+- 385xx: Tennessee
+
+- 689xx: Nebraska
+
+- 470xx: Indiana
+
+- 426xx: Kentucky
+
+- 373xx: Tennessee
+
+```{r,include=TRUE}
+meanb <- rep(0, 5)
+issue_date <- unique(clean_extended_data$issue_y)
+
+issue_date <- rev(issue_date)
+meanb <- rev(meanb)
+
+for(i in 1:5){
+  ind <- which(clean_extended_data$issue_y == issue_date[i])
+  meanb[i] <- mean(clean_extended_data$repay_fail[ind])
+}
+
+plot(1:5,meanb,xlim=c(1,6))
+text(1:5, meanb, issue_date, cex=0.6, pos=4, col="black")
+title(main = "Mean Repayment Failure by Issue Date (Year)")
+
+```
+
+* The above graph shows a clear declination of the mean repayment failure over years, being the highest from 2007 to 2009. 
+
+
+```{r, include=TRUE}
+meanb <- rep(0, 100)
+issue_date <- unique(clean_extended_data$issue_d)
+
+# Add sorting
+issue_date <- sort(issue_date)
+
+meanb <- rep(0, length(issue_date))  
+for (i in 1:length(issue_date)) {
+  ind <- which(clean_extended_data$issue_d == issue_date[i])
+  meanb[i] <- mean(clean_extended_data$repay_fail[ind])
+}
+
+# Create a vector to store colors based on mean values
+point_colors <- ifelse(meanb < 0.05, "green", ifelse(meanb > 0.20, "red", "black"))
+
+plot(1:length(issue_date), meanb, xlim = c(1, length(issue_date)), col = point_colors, pch = 19)
+
+
+text(1:100, meanb, issue_date, cex=0.6, pos=4, col="black")
+
+title(main = "Mean Repayment Failure by Issue Date")
+
+
+```
+
+* This plot indicate how the average repayment failure rate varies over time, allowing to identify patterns when loans were likely to be repaid (green) and periods when repayment failure were not likely to be repaid (red). 
+
+
+```{r, include = TRUE}
+meanb <- rep(0, 55)
+issue_date <- unique(clean_extended_data$earliest_cr_line_y)
+
+issue_date <- rev(issue_date)
+meanb <- rev(meanb)
+
+for(i in 1:55){
+  ind <- which(clean_extended_data$earliest_cr_line_y == issue_date[i])
+  meanb[i] <- mean(clean_extended_data$repay_fail[ind])
+}
+
+plot(1:55,meanb,xlim=c(1,60))
+text(1:55, meanb, issue_date, cex=0.6, pos=4, col="black")
+title(main = "Mean Repayment Failure by Earliest Credit Line (Year) ")
+```
+
+* Based on the above graph, it seems that the change in the probability of `repay_fail` due to `earliest_cr_line_y` is not that large, although there are some outliers.
+
+## Data Exploration - Final Conclusion
+
+* From the exploratory plots, it looks that there is variation between states, zip codes, the year of issue date in which the loan was funded.  
+* We will explore the variance for time and area for credit risk using  `addr_state`, `zip_code`, `earliest_cr_line` and `issue_d` variables as the random effects. 
+
+
+## Models without considering any variation
+
+```{r, include=TRUE}
+#no random effect
+model_glm <- glm(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths + term + revol_util + revol_bal + pub_rec + emp_length + home_ownership, data=clean_extended_data, family=binomial)
+
+summary(model_glm)
+```
+
+* This initial model without any variation (state, zip-code and time) will be used as the baseline model.
+* The summary points that `int_rate`, `annual_inc`,  and certain `purpose` categories are negatively significant associated with repayment failure, while `inq_last_6mths`, `revol_util`, `revol_bal`, `pub_rec`, `emp_length10+ years`,  `home_ownershipRENT`, `home_ownershipOTHER` and `term60` are positively associated. 
+
+## Models considering area as variation
+
+* Build a model to determine which variable, either `state` or `zipcode nested within state`, can effectively explain the area variations in credit risk.
+
+```{r, include=TRUE}
+clean_extended_data$zip_code <- as.factor(clean_extended_data$zip_code)
+clean_extended_data$addr_state <- as.factor(clean_extended_data$addr_state)
+
+clean_extended_data <- within(clean_extended_data, zipcode_in_state <- factor(as.factor(addr_state):zip_code))
+
+```
+
+```{r, include=TRUE}
+model_lme_area <- glmer(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths +  term + revol_util + revol_bal + pub_rec + emp_length + home_ownership + (1|zipcode_in_state) + (1|addr_state), data=clean_extended_data)
+
+summary(model_lme_area)
+```
+
+* The variance for `zipcode_in_state` is higher, which indicates that zipcode nested within state seems to capture the data set variability better compare to `addr_state`.
+* There doesn't appear to be a significant change in the fixed effect estimates.
+
+
+## Models considering time as variation
+
+* We will create nested structure by separating `issue_date` and `earliest_cr_line` into yearly and monthly units, respectively, and use a model to determine which one can best represent the time variance in credit risk.
+
+```{r, include=TRUE}
+# Create nested structure for `issue_d`
+clean_extended_data$issue_y <- as.factor(clean_extended_data$issue_y)
+clean_extended_data$issue_m <- as.factor(clean_extended_data$issue_m)
+
+clean_extended_data <- within(clean_extended_data, issuem_in_issuey <- factor(as.factor(issue_y):issue_m))
+```
+
+```{r, include=TRUE}
+# Create nested structure for `earliest_cr_line`
+clean_extended_data$earliest_cr_line_y <- as.factor(clean_extended_data$earliest_cr_line_y)
+clean_extended_data$earliest_cr_line_m <- as.factor(clean_extended_data$earliest_cr_line_m)
+
+clean_extended_data <- within(clean_extended_data, crlinem_in_creliney <- factor(as.factor(earliest_cr_line_y):earliest_cr_line_m))
+```
+
+
+```{r, include=TRUE}
+#the random effect are state and issue year.
+model_lme_time <- glmer(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths +  term + revol_util + revol_bal + pub_rec + emp_length + home_ownership + (1|issuem_in_issuey) + (1|issue_y)
+                             + (1|earliest_cr_line_y) + (1 |crlinem_in_creliney),
+                             data=clean_extended_data, family=binomial)
+
+summary(model_lme_time)
+```
+
+* The variance for `issue_y` is the highest, suggesting that `issue_y` can best explain the time variation among other random effects.
+
+
+## Final model considering both area and time variation
+
+* In the above, the result shows that it is better to take into account variation in area by zip-code information nested in the state and variation in time by year of the loan. A model is constructed that takes into account variation by nested zip-code and issue year.
+
+
+```{r, include=TRUE}
+#the random effect are state and issue year.
+model_lme_sy <- glmer(repay_fail ~ int_rate + purpose + annual_inc + inq_last_6mths +  term + revol_util + revol_bal + pub_rec + emp_length + home_ownership + (1|zipcode_in_state) + (1|issue_y), data=clean_extended_data, family=binomial)
+
+summary(model_lme_sy)
+```
+
+## Diagnostic plots:
+
+```{r, include=TRUE}
+p1 <- plot(model_lme_sy,id=0.05,idLabels=~.obs)
+p2 <- plot(model_lme_sy,ylim=c(-1.5,1),type=c("p","smooth"))
+plot(p1)
+plot(p2)
+```
+
+* The default (left-hand) diagnostic plot tells us that there are several extreme residuals, particularly, observation number 30840 has a (very) extreme residual (we use `idLabels=~.obs` to get outliers labelled by their observation number; otherwise, by default, they are labelled by their groups).; if we use `ylim=c(-1.5,1)` to limit the $y$-range, we get (on the right) the usual not-very-informative residuals plot expected from binary data.
+
+## Better Analysis:
+
+* Consider a more appropriate residual (and corresponding residual plot) to determine whether the develop model fits the data and interpret
+
+```{r, include=TRUE}
+
+res = simulateResiduals(model_lme_sy)
+plot(res)
+
+```
+
+
+* The plot shows significant deviation in KS Test, indicating that the residuals do not follow a uniform distribution.
+* As for ‘fixed effect’ logistic regression, typically explored via prediction performance.
+
+
+## Question 3: Can accounting for this variation (e.g., state/zip-code and time) improve performance benchmarks?
+
+* Yes. We create a Generalized Linear Mixed Effects Model (GLMM) setting `issue_y` and `zipcode_in_state` as random variables, accounting for area and time variation. This model shows improved performance compared to the baseline model that does not consider the random effects.
+* The Gini score for the GLMM model is 0.435, while the Gini score for the baseline model is 0.400.
+
+
+```{r, include=TRUE}
+prob_full_glm=predict(model_glm,type=c("response"))
+prob_full_glmer=predict(model_lme_sy,type=c("response"))
+
+g_model_full_glm <- roc(clean_extended_data$repay_fail ~ prob_full_glm)
+g_model_full_glmer <- roc(clean_extended_data$repay_fail ~ prob_full_glmer)
+## Setting levels: control = 0, case = 1
+## Setting direction: controls < cases
+
+# Calculate AUC
+auc_value_model0 <- auc(g_model_full_glm)
+auc_value_modelA <- auc(g_model_full_glmer)
+
+# Compute Gini coefficient
+gini_model0 <- 2 * (auc_value_model0 - 1/2)
+gini_modelA <- 2 * (auc_value_modelA - 1/2)
+
+# Print the value of Gini coefficient
+print(paste("Gini coefficient (no Random Effects):", gini_model0))
+print(paste("Gini coefficient (Random Effects):", gini_modelA))
+
+```
+
+```{r, include=TRUE}
+plot(g_model_full_glmer, main = "GLMM Model ROC, Gini=0.435", xlab = "False Positive Rate", ylab = "True Positive Rate")
+plot(g_model_full_glm, main = "GLM Model ROC, Gini=0.400", xlab = "False Positive Rate", ylab = "True Positive Rate")
+
+```
+
+## Question 4: Are there any surprising differences in variables that are important for predicting credit risk? This is again essential for regulations.
+
+
+```{r, include=TRUE}
+
+summary(model_glm)
+summary(model_lme_sy)
+
+```
+
+* When examining the variance of the random effects, we observe that the variation of area (0.073) has a higher impact on the model than variation of time (0.053).
+
+* Plotting the coefficients of significant predictor variables between GLMM and the baseline model to examine their differences:
+
+```{r, include=TRUE}
+
+# Store the summary in a variable
+summary_glm <- summary(model_glm)
+
+# Create a data frame for significant variables and their p-values
+significant_variables <- data.frame(
+  Coefficient = summary_glm$coefficients[, "Estimate"],
+  PValue = summary_glm$coefficients[, "Pr(>|z|)"]
+)
+
+# Filter for significant variables (PValue <= 0.05)
+significant_variables <- significant_variables[significant_variables$PValue <= 0.05, ]
+
+# Store the summary in a variable
+summary_lme <- summary(model_lme_sy)
+
+# Create a data frame for significant variables and their p-values
+significant_variables_lme <- data.frame(
+  Coefficient_lme = summary_lme$coefficients[, "Estimate"],
+  PValue_lme = summary_lme$coefficients[, "Pr(>|z|)"]
+)
+
+# Filter for significant variables (PValue <= 0.05)
+significant_variables_lme <- significant_variables_lme[significant_variables_lme$PValue_lme <= 0.05, ]
+
+# Merge the two data frames with the same variable names
+merged_significant_variables <- cbind(significant_variables, significant_variables_lme)
+
+# Rename the columns to indicate their source
+colnames(merged_significant_variables) <- c("Coefficient_glm", "PValue_glm", "Coefficient_lme", "PValue_lme")
+
+# Filter for significant variables (PValue <= 0.05) in the merged data frame
+significant_merged <- merged_significant_variables[merged_significant_variables$PValue_glm <= 0.05 & merged_significant_variables$PValue_lme <= 0.05, ]
+
+
+```
+
+```{r,include=TRUE}
+# Create a data frame for plotting with p-values as exponentials
+plot_data <- data.frame(
+  Variable = rownames(significant_merged),
+  Coefficient_glm = significant_merged$Coefficient_glm,
+  Coefficient_lme = significant_merged$Coefficient_lme
+)
+
+# Convert the "Variable" column to a factor to maintain the order
+plot_data$Variable <- factor(plot_data$Variable, levels = plot_data$Variable)
+
+
+# Create the barplot with p-values as exponentials on the X-axis and variables on the Y-axis
+ggplot(plot_data, aes(x = Coefficient_glm, y = Variable)) +
+  geom_bar(stat = "identity", aes(fill = "GLM"), alpha = 0.7, position = "dodge") +
+  geom_bar(stat = "identity", aes(x = Coefficient_lme, fill = "GLMM"), alpha = 0.7, position = "dodge") +
+  labs(title = "Coefficient Comparison",
+       x = "Coefficient value",
+       y = "Variable") +
+  theme(axis.text.y = element_text(hjust = 1)) +
+  scale_fill_manual(values = c("GLM" = "blue", "GLMM" = "red")) +
+  guides(fill = guide_legend(title = "Model"))
+```
+
+* In the above plot, two notable and surprising differences can be identified. First, `term60 months` appears to have a higher impact on repayment failure in the Linear Mixed-Effects Model, which may be related to its association with time variation. Second, 'home_ownershipOTHER' appears to have less impact on repayment failure.
+
+* We need to proceed with logarithmic transformations such as 'scale_x_log10 ' to inspect the p-values closely. 
+
+```{r, include = TRUE}
+
+# Create a data frame for plotting
+plot_data_pvalue <- data.frame(
+  Variable = rownames(significant_merged),
+  PValue_glm = significant_merged$PValue_glm,
+  PValue_lme = significant_merged$PValue_lme
+)
+
+# Convert the "Variable" column to a factor to maintain the order
+plot_data_pvalue$Variable <- factor(plot_data_pvalue$Variable, levels = plot_data_pvalue$Variable)
+
+# Create the barplot with P-values on the X-axis and variables on the Y-axis
+ggplot(plot_data_pvalue, aes(x = PValue_glm, y = Variable)) +
+  geom_bar(stat = "identity", aes(fill = "GLM"), alpha = 0.7, position = "dodge") +
+  geom_bar(stat = "identity", aes(x = PValue_lme, fill = "GLMM"), alpha = 0.7, position = "dodge") +
+  labs(title = "P-Value Comparison",
+       x = "P-Value",
+       y = "Variable") +
+  theme(axis.text.y = element_text(hjust = 1)) +
+  scale_x_log10(labels = scales::scientific_format(accuracy = 1)) +
+  scale_fill_manual(values = c("GLM" = "blue", "GLMM" = "red")) +
+  guides(fill = guide_legend(title = "Model"))
+
+```
+
+* The significance of `inq_last_6mths`, `annual_inc`, `int_rate`, and `revol_bal` decreased in the Linear Mixed-Effects Model. In contrast, the significance of `term60 months` increased. There isn't a clear relationship of these variables with the random effects. However, it can assume that most of the affected variables are related to time or area variation.
+
+
+## Confidence Intervals:
+
+* The following plots show the coefficient estimates and confidence intervals for significant explanatory variables.
+
+```{r, include = TRUE}
+
+# Calculate standard errors for the coefficients
+se <- sqrt(diag(vcov(model_lme_sy)))
+
+p_values <- 2 * (1 - pnorm(abs(fixef(model_lme_sy)) / se))
+
+significance_level <- 0.05
+
+# Create a table for significant variables
+significant_tab <- data.frame(
+  Est = fixef(model_lme_sy),
+  LL = fixef(model_lme_sy) - 1.96 * se,
+  UL = fixef(model_lme_sy) + 1.96 * se,
+  P_Value = p_values
+)
+
+# Filter for significant variables based on the significance level
+significant_tab <- significant_tab[significant_tab$P_Value < significance_level, ]
+
+tab_df <- as.data.frame(significant_tab)
+# Create a bar plot
+ggplot(tab_df, aes(x = factor(row.names(tab_df), levels = row.names(tab_df)), y = Est)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9), fill = "blue") +
+  geom_errorbar(aes(ymin = LL, ymax = UL), width = 0.2, position = position_dodge(width = 0.9)) +
+  geom_text(aes(label = sprintf("%.2f", Est), y = Est), vjust = -0.5, size = 3) +  # Add coefficient values
+  coord_flip() +  # Horizontal bars
+  theme_minimal() +
+  labs(x = "Coefficient", y = "Estimate") +
+  ggtitle("Confidence Intervals (Significant Variables)")
+
+```
+
+* The plot displays coefficient estimates and their associated confidence intervals for predictor variables in the model. Each blue bar represents a coefficient estimate, and the error bars indicate the range of confidence intervals.
+* The following variables have significantly positive coefficient estimates, suggesting that an increase in their values is associated with an increased risk of repayment failure: `int_rate`, `purposesmall_business`, `inq_last_6mths`, `term60 months`, `revol_util`, `revol_bal`, `pub_rec`, `emp_length10+ years`, `home_ownershipRENT` and `home_ownershipOTHER`.
+* On the other hand, variables such as `annual_inc`, `purposewedding`, `purposecar`, `purposemajor_purchase`, `purposecredit_card`, `purposehome_improvement` and `purposedebt_consolidation` have significant negative estimates, indicating a reduction in the risk of repayment failure when their values increase.
+
+## Question 5: Does credit risk change over time or between states? This is not something the bank has previously investigated and results may inform modified loan policies in the future.
+
+* Based on the following random effect visualisation, there is strong evidence that time and states influence repayment failure. Regarding the random effect of area, some zip-code area (e.g., CA:924XX) have positive effects suggesting higher values of the risk of repayment failure, while some zip-code area (e.g., VA: 242XX) have negative effects, indicating they are associated with lower values. This conclusion is drawn from the identified trends, which mostly fall within the range of 0.1 to 0.25. Values exceeding 0.25 or falling below 0.1 could be considered as outliers.  Additionally, the random effect of time shows a clear decline from 2007 to 2011.
+
+## Random effects
+
+* Extract and visualise the random effects:
+
+
+```{r, include = TRUE}
+meanb <- rep(0, 905)
+nesting <- unique(clean_extended_data$zipcode_in_state)
+colors <- ifelse(meanb > 0.25, "red", ifelse(meanb < 0.1, "blue", "black"))
+
+for (i in 1:905) {
+  ind <- which(clean_extended_data$zipcode_in_state == nesting[i])
+  meanb[i] <- mean(clean_extended_data$repay_fail[ind])
+  colors[i] <- ifelse(meanb[i] > 0.25, "red", ifelse(meanb[i] < 0.1, "blue", "black"))
+}
+
+# Create the plot
+plot(1:905, meanb, xlim = c(1, 60), xlab = "Nesting: State - Zipcode", ylab = "Mean Repayment Failure")
+text(1:905, meanb, nesting, cex = 0.6, pos = 4, col = colors)
+title(main = "Mean Repayment Failure by State and Zipcode")
+
+# Adding a legend for colors
+legend("topright", legend = c("Above 0.25: High risk", "Between 0.1 and 0.25: Medium risk", "Below 0.1: Low risk"),
+       fill = c("red", "black", "blue"))
+
+
+```
+
+* We have eased the visualisation by extracting the first two letters of the 'zip-code nested within state' (State:Zipcode). The plot aims to identify and compare the mean repayment failure rates across different State-Zipcode combinations, providing insights into loan repayment behaviour within specific geographic regions. The trends typically fall within the range of 0.1 to 0.25 (medium), while values exceeding 0.25 (high) or falling below 0.1 (low) could be considered outliers. 
+
+* According to this plot, it suggests that the area with zipcode 924XX (State: CA) poses the highest credit risk, while the area with zipcode 242XX (State: VA) has the lowest credit risk.
+
+
+```{r,include=TRUE}
+lattice::dotplot(ranef(model_lme_sy, which = "zipcode_in_state", condVar = TRUE), scales = list(y = list(alternating = 0)))
+```
+
+* We can see that the conditional random effects vary across different "zipcode_in_state" categories. Some categories have positive effects, suggesting they contribute to higher values of the risk of repayment failure, while others have negative effects, indicating they are associated with lower values.
+
+
+```{r,include=TRUE}
+lattice::dotplot(ranef(model_lme_sy, which = "issue_y", condVar = TRUE))
+```
+
+* The plot points a significant decline from 2007 to 2011.
+
+
+## Conclusion
+
+In this analysis, a new GLM model has been built in part 1 to address question 1 and 2. This model is proven to predict repayment failure more accurately than the previous model. Additionally, in part 2, an extended model is developed considering variations in both area and time to address question 3 to 5, suggesting an even higher performance compared to part 1. However, it requires further investigation on model fitness to ensure this model can be implemented. It's worth noting that the model could be further enhanced by incorporating more detailed borrowing-related variables, such as the subject's assets. Moreover, as this model is built using historical lending data from 2007 to 2011, it is recommended to capture current data to enhance model performance. This model is also limited in terms of location, as implementing this model outside the area consideration can reduce the model performance.
+
+
+
+
+
+
+
